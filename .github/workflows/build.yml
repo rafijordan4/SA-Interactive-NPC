@@ -1,29 +1,51 @@
 name: Build GTA SA Interactive NPC
+
 on:
   workflow_dispatch:
   push:
     branches: [ main ]
+
 jobs:
   build:
     runs-on: ubuntu-latest
+
     steps:
       - uses: actions/checkout@v4
-      - name: Download AML PSDK
+
+      - name: Download AML PSDK and headers
         run: |
           git clone --depth 1 https://github.com/AndroidModLoader/aml-psdk.git psdk
+          git clone --depth 1 https://github.com/RusJJ/AndroidModLoader.git aml
+
           cp main.cpp psdk/main.cpp
           cp Android.mk psdk/Android.mk
           cp Application.mk psdk/Application.mk
+
+          cp -R aml/template_of_mod/mod psdk/mod
+          cp -R aml/include psdk/include
+
+          test -f psdk/mod/amlmod.h
+          test -f psdk/mod/logger.cpp
+          test -f psdk/mod/config.cpp
+          test -f psdk/mod/flogger.cpp
+
       - name: Install Android NDK
         uses: nttld/setup-ndk@v1
         with:
           ndk-version: r25c
+
       - name: Compile ARM64 plugin
         run: |
           cd psdk
           ndk-build NDK_PROJECT_PATH=. APP_BUILD_SCRIPT=./Android.mk NDK_APPLICATION_MK=./Application.mk NDK_DEBUG=0 -j2
           mkdir -p ../dist
           cp libs/arm64-v8a/libSAInteractiveNPC64.so ../dist/LibSAInteractiveNPC.so
+
+      - name: Verify shared library
+        run: |
+          file dist/LibSAInteractiveNPC.so
+          llvm-readelf -h dist/LibSAInteractiveNPC.so
+
       - name: Upload plugin
         uses: actions/upload-artifact@v4
         with:

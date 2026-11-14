@@ -4,17 +4,22 @@ include $(CLEAR_VARS)
 
 LOCAL_CPP_EXTENSION := .cpp .cc
 
-ifeq ($(TARGET_ARCH_ABI), armeabi-v7a)
-    LOCAL_MODULE := SAInteractiveNPC
-else
-    LOCAL_MODULE := SAInteractiveNPC64
-endif
+LOCAL_MODULE := SAInteractiveNPC64
 
-LOCAL_SRC_FILES := main.cpp
-LOCAL_C_INCLUDES := $(LOCAL_PATH) $(LOCAL_PATH)/aml-psdk
+LOCAL_SRC_FILES := \
+    main.cpp \
+    mod/logger.cpp \
+    mod/config.cpp \
+    mod/flogger.cpp
 
-LOCAL_CXXFLAGS += -O2 -DNDEBUG -std=c++17
+LOCAL_C_INCLUDES += \
+    $(LOCAL_PATH) \
+    $(LOCAL_PATH)/include \
+    $(LOCAL_PATH)/aml-psdk
+
 LOCAL_CPPFLAGS += -O2 -DNDEBUG -std=c++17
+LOCAL_CFLAGS += -O2 -DNDEBUG
+
 LOCAL_LDLIBS += -llog
 
 include $(BUILD_SHARED_LIBRARY)
