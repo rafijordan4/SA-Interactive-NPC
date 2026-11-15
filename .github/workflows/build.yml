@@ -5,6 +5,11 @@ on:
   push:
     branches: [ main ]
 
+env:
+  # Commit yang diaudit. Ubah hanya setelah memeriksa ulang API-nya.
+  PSDK_SHA: 6dd5c931d74050802b6f3b5b60aab6922edcb0f7
+  AML_SHA: 57ca275627904ac57e690b41a71e8f7aa445ca4b
+
 jobs:
   build:
     runs-on: ubuntu-latest
@@ -12,42 +17,84 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
-      - name: Download AML PSDK and headers
+      - name: Tes logika (host)
         run: |
-          git clone --depth 1 https://github.com/AndroidModLoader/aml-psdk.git psdk
-          git clone --depth 1 https://github.com/RusJJ/AndroidModLoader.git aml
+          g++ -std=c++17 -Wall -Wextra -Iinclude \
+            tests/test_logic.cpp src/dialogue_system.cpp src/role_classifier.cpp -o /tmp/test_logic
+          /tmp/test_logic
 
-          cp main.cpp psdk/main.cpp
-          cp Android.mk psdk/Android.mk
-          cp Application.mk psdk/Application.mk
+      - name: Ambil PSDK dan AML (versi terpin)
+        run: |
+          git clone https://github.com/AndroidModLoader/aml-psdk.git work
+          git -C work checkout "$PSDK_SHA"
+          git clone https://github.com/RusJJ/AndroidModLoader.git aml
+          git -C aml checkout "$AML_SHA"
 
-          cp -R aml/template_of_mod/mod psdk/mod
-          cp -R aml/include psdk/include
+          # Template AML: mod/ (amlmod.h, logger, config) dan include/ (aml.h dll.)
+          cp -R aml/template_of_mod/mod work/mod
+          mkdir -p work/include
+          cp -R aml/include/. work/include/
 
-          test -f psdk/mod/amlmod.h
-          test -f psdk/mod/logger.cpp
-          test -f psdk/mod/config.cpp
-          test -f psdk/mod/flogger.cpp
+          # Source proyek
+          cp -R include/. work/include/
+          cp -R src work/src
+          cp main.cpp Android.mk Application.mk work/
 
-      - name: Install Android NDK
+          for f in mod/amlmod.h mod/logger.cpp mod/config.cpp mod/flogger.cpp \
+                   aml-psdk/game_sa/Events.h aml-psdk/game_sa/other/Pools.h \
+                   include/npc_system.h src/ui_system.cpp; do
+            test -f "work/$f" || { echo "File dependensi hilang: $f"; exit 1; }
+          done
+
+      - name: Pasang Android NDK r25c
+        id: ndk
         uses: nttld/setup-ndk@v1
         with:
           ndk-version: r25c
 
-      - name: Compile ARM64 plugin
+      - name: Kompilasi ARM64
         run: |
-          cd psdk
-          ndk-build NDK_PROJECT_PATH=. APP_BUILD_SCRIPT=./Android.mk NDK_APPLICATION_MK=./Application.mk NDK_DEBUG=0 -j2
+          cd work
+          "$ANDROID_NDK_HOME/ndk-build" NDK_PROJECT_PATH=. APP_BUILD_SCRIPT=./Android.mk \
+            NDK_APPLICATION_MK=./Application.mk NDK_DEBUG=0 -j2
           mkdir -p ../dist
           cp libs/arm64-v8a/libSAInteractiveNPC64.so ../dist/LibSAInteractiveNPC.so
 
-      - name: Verify shared library
+      - name: Validasi biner
         run: |
-          file dist/LibSAInteractiveNPC.so
-          readelf -h dist/LibSAInteractiveNPC.so
+          set -e
+          SO=dist/LibSAInteractiveNPC.so
+          BIN="$ANDROID_NDK_HOME/toolchains/llvm/prebuilt/linux-x86_64/bin"
+          READELF="$BIN/llvm-readelf"
+          NM="$BIN/llvm-nm"
+
+          test -s "$SO"
+          file "$SO"
+
+          HDR=$("$READELF" -h "$SO")
+          echo "$HDR"
+          echo "$HDR" | grep -q "Class:.*ELF64"   || { echo "Bukan ELF64"; exit 1; }
+          echo "$HDR" | grep -q "Machine:.*AArch64" || { echo "Bukan AArch64"; exit 1; }
+          echo "$HDR" | grep -q "Type:.*DYN"      || { echo "Bukan shared object"; exit 1; }
+
+          echo "--- dependency (NEEDED)"
+          "$READELF" -d "$SO" | grep NEEDED | tee /tmp/needed.txt
+          # STL harus static; hanya library sistem Android yang boleh dibutuhkan.
+          if grep -v -E 'lib(log|c|m|dl)\.so' /tmp/needed.txt; then
+            echo "Ada dependency tak terduga (mis. libc++_shared.so)"; exit 1
+          fi
+
+          echo "--- simbol ekspor wajib AML"
+          "$NM" -D --defined-only "$SO" > /tmp/exports.txt
+          grep -w __GetModInfo /tmp/exports.txt || { echo "__GetModInfo tidak diekspor"; exit 1; }
+          grep -w OnModLoad    /tmp/exports.txt || { echo "OnModLoad tidak diekspor"; exit 1; }
+
+          echo "--- simbol tak terdefinisi (diselesaikan runtime oleh game/AML)"
+          "$NM" -D --undefined-only "$SO" | head -60
 
       - name: Upload plugin
         uses: actions/upload-artifact@v4
         with:
           name: LibSAInteractiveNPC
           path: dist/LibSAInteractiveNPC.so
+          if-no-files-found: error
